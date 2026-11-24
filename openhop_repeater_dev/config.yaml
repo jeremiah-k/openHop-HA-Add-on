@@ -9,6 +9,7 @@ arch:
 startup: application
 boot: auto
 host_network: true
+timeout: 300
 webui: "http://[HOST]:[PORT:8000]/"
 ports:
   8000/tcp: 8000
@@ -27,5 +28,7 @@ init: true
 backup: cold
 options:
   config_location_note: "addon_config/*_openhop_repeater_dev/config.yaml"
+  stop_timeout: 8
 schema:
   config_location_note: str
+  stop_timeout: int(1,295)

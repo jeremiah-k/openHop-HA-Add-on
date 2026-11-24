@@ -32,6 +32,7 @@ done
 if [ -z "${PYTHON}" ] || [ ! -x "${PYTHON}" ]; then
     fatal "python3 is unavailable"
 fi
+
 [ -r "${TEMPLATE_CONFIG_FILE}" ] || fatal "packaged configuration template is missing"
 [ -r "${CONFIG_HELPER}" ] || fatal "configuration bootstrap helper is missing"
 
@@ -46,6 +47,53 @@ done
 export PYTHONPATH
 
 mkdir -p "${CONFIG_DIR}" "${DATA_DIR}"
+
+# The Home Assistant Supervisor stores the add-on options in the add-on data
+# directory. The operator raises the stop deadline the repeater runtime is
+# granted with the stop_timeout option.
+OPTIONS_FILE="${OPENHOP_ADDON_OPTIONS_FILE:-${DATA_DIR}/options.json}"
+OPTION_STOP_TIMEOUT=""
+if [ -r "${OPTIONS_FILE}" ]; then
+    OPTION_STOP_TIMEOUT="$("${PYTHON}" -c '
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        options = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+value = options.get("stop_timeout")
+if isinstance(value, bool) or not isinstance(value, int):
+    raise SystemExit(0)
+print(value)
+' "${OPTIONS_FILE}" 2>/dev/null || true)"
+fi
+if [ -z "${OPENHOP_ADDON_STOP_TIMEOUT:-}" ] && [ -n "${OPTION_STOP_TIMEOUT}" ]; then
+    case "${OPTION_STOP_TIMEOUT}" in
+        ''|*[!0-9]*) fatal "the stop_timeout option must be a non-negative integer" ;;
+    esac
+    STOP_TIMEOUT="${OPTION_STOP_TIMEOUT}"
+fi
+
+# Reserve five seconds for wrapper/outer supervisor teardown. The static
+# add-on timeout is 300s; options cannot change that outer deadline.
+if [ "${STOP_TIMEOUT}" -lt 1 ]; then
+    fatal "stop timeout must be positive"
+fi
+if [ "${STOP_TIMEOUT}" -gt 295 ]; then
+    log "stop timeout exceeds the 295s wrapper allowance; using 295s"
+    STOP_TIMEOUT=295
+fi
+
+# The repeater runtime compares the stop deadline the deployment grants it
+# against the budget its managed plugin shutdown needs. Declare the deadline
+# this add-on actually grants, so the runtime can detect an insufficient
+# budget and report it instead of truncating a plugin drain unnoticed.
+export OPENHOP_STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT}"
+unset OPENHOP_MANAGER_STOP_TIMEOUT_SECONDS
+log "stop deadline granted to the repeater runtime: ${STOP_TIMEOUT}s"
+
 "${PYTHON}" "${CONFIG_HELPER}" bootstrap "${TEMPLATE_CONFIG_FILE}" "${CONFIG_FILE}"
 
 if [ "$(readlink "${RUNTIME_CONFIG_DIR}" 2>/dev/null || true)" != "${CONFIG_DIR}" ]; then

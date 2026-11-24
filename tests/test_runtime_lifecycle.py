@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -73,6 +74,44 @@ class RuntimeLifecycleTests(unittest.TestCase):
     def test_channel_wrappers_are_identical(self) -> None:
         scripts = [ROOT / addon / "run.sh" for addon in ADDONS]
         self.assertEqual(scripts[0].read_bytes(), scripts[1].read_bytes())
+
+    def test_stop_deadline_is_declared_to_the_runtime(self) -> None:
+        source = """
+            import os
+            from pathlib import Path
+
+            root = Path(os.environ["OPENHOP_TEST_ROOT"])
+            root.joinpath("deadline.env").write_text(
+                f"{os.environ.get('OPENHOP_STOP_TIMEOUT_SECONDS', '')}\\n"
+                f"{os.environ.get('OPENHOP_MANAGER_STOP_TIMEOUT_SECONDS', '')}\\n",
+                encoding="utf-8",
+            )
+            raise SystemExit(23)
+        """
+        for addon in ADDONS:
+            for granted, expected in (("8", "8"), ("45", "45"), ("300", "295")):
+                with self.subTest(addon=addon, granted=granted), tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    package_root = make_runtime(root, source)
+                    env = base_env(root, addon, package_root)
+                    if granted != "8":
+                        data_dir = root / "data"
+                        data_dir.mkdir(parents=True, exist_ok=True)
+                        (data_dir / "options.json").write_text(
+                            json.dumps({"stop_timeout": int(granted)}), encoding="utf-8"
+                        )
+                    result = subprocess.run(
+                        ["sh", str(ROOT / addon / "run.sh")], env=env,
+                        capture_output=True, text=True, timeout=15, check=False,
+                    )
+                    deadline = root / "deadline.env"
+                    self.assertTrue(deadline.exists(), result.stdout + result.stderr)
+                    self.assertEqual(
+                        deadline.read_text(encoding="utf-8").splitlines(),
+                        [expected, ""],
+                        result.stdout + result.stderr,
+                    )
+                    self.assertIn(f"stop deadline granted to the repeater runtime: {expected}s", result.stdout)
 
     def test_user_site_packages_are_visible_before_bootstrap(self) -> None:
         text = (ROOT / ADDONS[0] / "run.sh").read_text(encoding="utf-8")
