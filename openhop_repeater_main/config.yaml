@@ -25,7 +25,10 @@ apparmor: false
 full_access: true
 init: true
 backup: cold
+timeout: 300
 options:
   config_location_note: "addon_config/*_openhop_repeater_main/config.yaml"
+  stop_timeout: 8
 schema:
   config_location_note: str
+  stop_timeout: int(1,295)
